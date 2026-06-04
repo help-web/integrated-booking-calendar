@@ -1,10 +1,13 @@
-// 엑셀형 행/열 자동 조절 및 우클릭 컨텍스트 메뉴 기능이 포함된 월간 캘린더 대시보드 컴포넌트입니다.
+// Univer Sheets로 월간 예약 캘린더를 렌더링하는 대시보드 컴포넌트입니다.
 "use client";
 
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { UniverSheetsCorePreset } from "@univerjs/preset-sheets-core";
+import UniverPresetSheetsCoreEnUS from "@univerjs/preset-sheets-core/locales/en-US";
+import { createUniver, LocaleType, mergeLocales } from "@univerjs/presets";
 
-const ALL_ROOMS = [
+const FALLBACK_ROOMS = [
   "A",
   "B",
   "C",
@@ -29,379 +32,277 @@ const ALL_ROOMS = [
   "U1",
   "U2",
 ];
-const DAY_NAMES = ["월", "화", "수", "목", "금", "토", "일"];
 
-interface RowData {
-  id: string;
-  data: Record<string, string>; // { "2026-06-01": "내용..." }
-}
+type BookingRow = {
+  id: string | number;
+  title?: string | null;
+};
 
-interface ContextMenuState {
-  visible: boolean;
-  x: number;
-  y: number;
-  weekIndex: number;
-  rowIndex: number;
-}
+type BookingRoomRow = {
+  id: string | number;
+  booking_id: string | number;
+  room_id: string | number;
+  use_date: string; // date (YYYY-MM-DD)
+  start_time: string; // time
+  end_time: string; // time
+  active: boolean;
+  room?: { code?: string | null } | null;
+  booking?: { title?: string | null } | null;
+};
 
 export default function Dashboard() {
-  const [year, setYear] = useState<number>(2026);
-  const [month, setMonth] = useState<number>(6); // 1 ~ 12
-
-  // 주차별 행 데이터 상태 관리 { weekIndex: RowData[] }
-  const [weekRows, setWeekRows] = useState<Record<number, RowData[]>>({});
-
-  // 컨텍스트 메뉴 및 클립보드 상태
-  const [contextMenu, setContextMenu] = useState<ContextMenuState>({
-    visible: false,
-    x: 0,
-    y: 0,
-    weekIndex: -1,
-    rowIndex: -1,
-  });
-  const [clipboardRow, setClipboardRow] = useState<RowData | null>(null);
-  const [clipboardAction, setClipboardAction] = useState<"copy" | "cut" | null>(
+  const [year, setYear] = useState<number>(new Date().getFullYear());
+  const containerRef = useRef<HTMLDivElement>(null);
+  const univerApiRef = useRef<ReturnType<typeof createUniver>["univerAPI"] | null>(
     null,
   );
 
-  // 현재 월의 주차 및 날짜 계산
-  const weeks = useMemo(() => {
-    const firstDay = new Date(year, month - 1, 1);
-    const lastDay = new Date(year, month, 0);
-    const daysInMonth = lastDay.getDate();
+  const [rooms, setRooms] = useState<string[] | null>(null);
+  const [bookingRooms, setBookingRooms] = useState<BookingRoomRow[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-    const startingDayOfWeek =
-      firstDay.getDay() === 0 ? 6 : firstDay.getDay() - 1;
-    let currentDay = 1;
-    const weekArray = [];
-    let weekIndex = 0;
+  const roomCodes = useMemo(() => {
+    if (rooms && rooms.length > 0) return rooms;
+    return FALLBACK_ROOMS;
+  }, [rooms]);
 
-    while (currentDay <= daysInMonth) {
-      const weekDays = [];
-      for (let i = 0; i < 7; i++) {
-        if (weekIndex === 0 && i < startingDayOfWeek) {
-          weekDays.push(null); // 이전 달 빈칸
-        } else if (currentDay > daysInMonth) {
-          weekDays.push(null); // 다음 달 빈칸
-        } else {
-          const dateStr = `${year}-${String(month).padStart(2, "0")}-${String(currentDay).padStart(2, "0")}`;
-          weekDays.push({
-            dateObj: new Date(year, month - 1, currentDay),
-            dateStr,
-          });
-          currentDay++;
-        }
-      }
-      weekArray.push(weekDays);
-      weekIndex++;
+  const byBookingIdRooms = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const br of bookingRooms ?? []) {
+      const id = String(br.booking_id);
+      const code = br.room?.code ?? null;
+      if (!code) continue;
+      const prev = map.get(id) ?? [];
+      if (!prev.includes(code)) prev.push(code);
+      map.set(id, prev);
     }
-    return weekArray;
-  }, [year, month]);
+    return map;
+  }, [bookingRooms]);
 
-  // 초기 렌더링 시 현재 월의 빈 행(Row) 생성
+  const byDateUsedRooms = useMemo(() => {
+    const used = new Map<string, Set<string>>();
+    for (const br of bookingRooms ?? []) {
+      if (!br.active) continue;
+      const dateKey = br.use_date;
+      const roomsForBooking = byBookingIdRooms.get(String(br.booking_id)) ?? [];
+      if (!used.has(dateKey)) used.set(dateKey, new Set());
+      const set = used.get(dateKey)!;
+      roomsForBooking.forEach((r) => set.add(r));
+    }
+    return used;
+  }, [bookingRooms, byBookingIdRooms]);
+
+  const byDateEvents = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const br of bookingRooms ?? []) {
+      if (!br.active) continue;
+      const dateKey = br.use_date;
+      const title = br.booking?.title ?? "예약";
+      const room = br.room?.code ?? "?";
+      const line = `${title} (${br.start_time}-${br.end_time}) [${room}]`;
+
+      const prev = map.get(dateKey) ?? [];
+      prev.push(line);
+      map.set(dateKey, prev);
+    }
+    return map;
+  }, [bookingRooms]);
+
   useEffect(() => {
-    const initialRows: Record<number, RowData[]> = {};
-    weeks.forEach((_, idx) => {
-      if (!weekRows[idx] || weekRows[idx].length === 0) {
-        initialRows[idx] = [
-          { id: `row_${Date.now()}_${idx}_0`, data: {} },
-        ];
-      } else {
-        initialRows[idx] = weekRows[idx];
+    let cancelled = false;
+
+    async function load() {
+      setLoadError(null);
+
+      const { createSupabaseBrowserClient } = await import("@/lib/supabase");
+      const supabase = createSupabaseBrowserClient();
+
+      const startDate = `${year}-01-01`;
+      const endDate = `${year}-12-31`;
+
+      const [roomsRes, bookingRoomsRes] = await Promise.all([
+        supabase.from("rooms").select("code,sort_order,active").order("sort_order"),
+        supabase
+          .from("booking_rooms")
+          .select(
+            "id,booking_id,room_id,use_date,start_time,end_time,active,room:rooms(code),booking:bookings(title)",
+          )
+          .gte("use_date", startDate)
+          .lte("use_date", endDate),
+      ]);
+
+      if (cancelled) return;
+
+      if (roomsRes.error || bookingRoomsRes.error) {
+        setLoadError(
+          [roomsRes.error?.message, bookingRoomsRes.error?.message]
+            .filter(Boolean)
+            .join("\n"),
+        );
+        setRooms(null);
+        setBookingRooms(null);
+        return;
       }
-    });
-    setWeekRows((prev) => ({ ...prev, ...initialRows }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [weeks]);
 
-  // 컨텍스트 메뉴 닫기 (외부 클릭 시)
-  useEffect(() => {
-    const handleClickOutside = () => {
-      if (contextMenu.visible)
-        setContextMenu((prev) => ({ ...prev, visible: false }));
+      setRooms(
+        (roomsRes.data ?? [])
+          .filter((r: { active: boolean }) => r.active)
+          .map((r: { code: string }) => r.code),
+      );
+      setBookingRooms((bookingRoomsRes.data ?? []) as BookingRoomRow[]);
+    }
+
+    load().catch((e) => {
+      if (cancelled) return;
+      setLoadError(e instanceof Error ? e.message : String(e));
+    });
+
+    return () => {
+      cancelled = true;
     };
-    document.addEventListener("click", handleClickOutside);
-    return () => document.removeEventListener("click", handleClickOutside);
-  }, [contextMenu.visible]);
+  }, [year]);
 
-  // 셀 데이터 업데이트
-  const handleCellChange = (
-    wIdx: number,
-    rIdx: number,
-    dateStr: string,
-    value: string,
-  ) => {
-    setWeekRows((prev) => {
-      const newRows = [...(prev[wIdx] || [])];
-      newRows[rIdx] = {
-        ...newRows[rIdx],
-        data: { ...newRows[rIdx].data, [dateStr]: value },
-      };
-      return { ...prev, [wIdx]: newRows };
-    });
-  };
+  useEffect(() => {
+    if (!containerRef.current) return;
 
-  // 컨텍스트 메뉴 호출
-  const handleRightClick = (
-    e: React.MouseEvent,
-    wIdx: number,
-    rIdx: number,
-  ) => {
-    e.preventDefault();
-    setContextMenu({
-      visible: true,
-      x: e.pageX,
-      y: e.pageY,
-      weekIndex: wIdx,
-      rowIndex: rIdx,
-    });
-  };
+    univerApiRef.current?.dispose();
 
-  // 행(Row) 조작 함수들
-  const addRow = (direction: "above" | "below") => {
-    const { weekIndex, rowIndex } = contextMenu;
-    setWeekRows((prev) => {
-      const rows = [...(prev[weekIndex] || [])];
-      const newRow = { id: `row_${Date.now()}`, data: {} };
-      const targetIndex = direction === "above" ? rowIndex : rowIndex + 1;
-      rows.splice(targetIndex, 0, newRow);
-      return { ...prev, [weekIndex]: rows };
-    });
-  };
-
-  const deleteRow = () => {
-    const { weekIndex, rowIndex } = contextMenu;
-    setWeekRows((prev) => {
-      const rows = [...(prev[weekIndex] || [])];
-      if (rows.length > 1) {
-        rows.splice(rowIndex, 1);
-      } else {
-        rows[0] = { id: `row_${Date.now()}`, data: {} }; // 최소 1개 행 유지, 데이터만 초기화
-      }
-      return { ...prev, [weekIndex]: rows };
-    });
-  };
-
-  const copyRow = (action: "copy" | "cut") => {
-    const { weekIndex, rowIndex } = contextMenu;
-    const rowToCopy = weekRows[weekIndex][rowIndex];
-    setClipboardRow(rowToCopy);
-    setClipboardAction(action);
-  };
-
-  const pasteRow = () => {
-    if (!clipboardRow) return;
-    const { weekIndex, rowIndex } = contextMenu;
-    setWeekRows((prev) => {
-      const rows = [...(prev[weekIndex] || [])];
-      // 선택된 행을 클립보드 데이터로 덮어쓰기
-      rows[rowIndex] = { ...rows[rowIndex], data: { ...clipboardRow.data } };
-      return { ...prev, [weekIndex]: rows };
+    const { univerAPI } = createUniver({
+      locale: LocaleType.EN_US,
+      locales: {
+        [LocaleType.EN_US]: mergeLocales(UniverPresetSheetsCoreEnUS),
+      },
+      presets: [
+        UniverSheetsCorePreset({
+          container: containerRef.current,
+        }),
+      ],
     });
 
-    if (clipboardAction === "cut") {
-      setClipboardRow(null);
-      setClipboardAction(null);
+    univerApiRef.current = univerAPI;
+
+    const fWorkbook = univerAPI.createWorkbook({
+      id: String(year),
+      name: `${year}년`,
+    });
+    for (let m = 1; m <= 12; m++) {
+      const monthName = `${m}월`;
+      const sheet = buildMonthSheetSkeleton(year, m);
+      const fWorksheet = fWorkbook.create(monthName, sheet.rows, sheet.cols, { sheet });
+      applyMonthBlockMerges(fWorksheet, sheet.weekCount, sheet.blockRowCount);
     }
-  };
 
-  // 예약된 방 계산 (해당 날짜의 모든 행 텍스트 검사)
-  const getUsedRooms = (wIdx: number, dateStr: string) => {
-    const rows = weekRows[wIdx] || [];
-    const combinedText = rows.map((r) => r.data[dateStr] || "").join(" ");
-    return ALL_ROOMS.filter((room) => combinedText.includes(room));
-  };
+    return () => {
+      univerAPI.dispose();
+    };
+  }, [year]);
 
   return (
-    <div className="flex flex-col h-screen bg-white text-slate-800 font-sans overflow-hidden">
-      {/* 헤더 컨트롤 영역 */}
-      <div className="flex items-center p-4 border-b border-slate-300 bg-slate-50 shrink-0 gap-8">
+    <div className="flex flex-col h-screen bg-white text-slate-800 overflow-hidden">
+      <div className="flex items-center p-4 border-b border-slate-200 bg-slate-50 shrink-0 gap-4">
         <div className="flex items-center gap-2">
           <button
             onClick={() => setYear((y) => y - 1)}
             className="p-1 hover:bg-slate-200 rounded"
+            aria-label="이전 연도"
           >
             <ChevronLeft size={20} />
           </button>
-          <span className="text-xl font-bold w-20 text-center">{year}년</span>
+          <span className="text-xl font-bold w-24 text-center">{year}년</span>
           <button
             onClick={() => setYear((y) => y + 1)}
             className="p-1 hover:bg-slate-200 rounded"
+            aria-label="다음 연도"
           >
             <ChevronRight size={20} />
           </button>
         </div>
 
-        <div className="flex gap-1">
-          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((m) => (
-            <button
-              key={m}
-              onClick={() => setMonth(m)}
-              className={`w-10 h-10 rounded-full text-sm font-bold transition-colors ${month === m ? "bg-blue-600 text-white shadow-md" : "bg-transparent text-slate-600 hover:bg-slate-200"}`}
-            >
-              {m}월
-            </button>
-          ))}
-        </div>
+        {loadError && (
+          <div className="text-sm text-red-600 whitespace-pre-wrap">
+            Supabase 데이터 로드 실패.
+            {"\n"}
+            {loadError}
+          </div>
+        )}
       </div>
 
-      {/* 엑셀형 보드 스크롤 영역 */}
-      <div className="flex-1 overflow-auto bg-slate-300 p-2">
-        <div className="min-w-[1600px] flex flex-col gap-6">
-          {weeks.map((week, wIdx) => {
-            const rows = weekRows[wIdx] || [];
-
-            return (
-              <div
-                key={wIdx}
-                className="bg-white border border-slate-400 shadow-sm rounded-sm overflow-hidden"
-              >
-                <table className="w-full table-fixed border-collapse">
-                  {/* 요일 및 날짜 헤더 */}
-                  <thead>
-                    <tr>
-                      <th className="w-12 bg-slate-200 border-r border-b border-slate-300"></th>
-                      {week.map((day, dIdx) => (
-                        <th
-                          key={dIdx}
-                          className="border-b border-r border-slate-300 bg-slate-100 p-2 relative"
-                        >
-                          {day ? (
-                            <div className="flex flex-col">
-                              <div className="flex justify-between items-center mb-1">
-                                <span
-                                  className={`text-sm font-bold ${dIdx === 5 ? "text-blue-600" : dIdx === 6 ? "text-red-500" : "text-slate-700"}`}
-                                >
-                                  {day.dateObj.getDate()}일 ({DAY_NAMES[dIdx]}
-                                  )
-                                </span>
-                              </div>
-
-                              {/* 가용성 요약 (파란색: 가능, 빨간색: 예약됨) */}
-                              <div className="flex flex-col gap-1 text-[10px] text-left">
-                                @@@AVAILABLE_ROOMS@@@
-                                <div className="text-blue-600 break-words leading-tight bg-blue-50 p-1 rounded">
-                                  이용 가능:{" "}
-                                  {ALL_ROOMS.filter(
-                                    (r) =>
-                                      !getUsedRooms(wIdx, day.dateStr).includes(
-                                        r,
-                                      ),
-                                  ).join(", ")}
-                                </div>
-                                @@@BOOKED_ROOMS@@@
-                                {getUsedRooms(wIdx, day.dateStr).length >
-                                  0 && (
-                                  <div className="text-red-600 font-bold break-words leading-tight bg-red-50 p-1 rounded">
-                                    예약 완료:{" "}
-                                    {getUsedRooms(wIdx, day.dateStr).join(", ")}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="text-slate-300 text-sm">빈 칸</div>
-                          )}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-
-                  {/* 데이터 행(Row) */}
-                  <tbody>
-                    {rows.map((row, rIdx) => (
-                      <tr key={row.id}>
-                        {/* 좌측 번호 및 우클릭 영역 */}
-                        <td
-                          className="bg-slate-200 text-center text-xs text-slate-500 font-bold border-r border-b border-slate-300 cursor-context-menu hover:bg-slate-300 select-none"
-                          onContextMenu={(e) =>
-                            handleRightClick(e, wIdx, rIdx)
-                          }
-                        >
-                          {rIdx + 1}
-                        </td>
-
-                        {/* 입력 셀들 */}
-                        {week.map((day, dIdx) => (
-                          <td
-                            key={dIdx}
-                            className={`border-r border-b border-slate-300 align-top ${!day ? "bg-slate-100/50" : ""}`}
-                          >
-                            {day && (
-                              <textarea
-                                value={row.data[day.dateStr] || ""}
-                                onChange={(e) =>
-                                  handleCellChange(
-                                    wIdx,
-                                    rIdx,
-                                    day.dateStr,
-                                    e.target.value,
-                                  )
-                                }
-                                className="w-full h-full min-h-[100px] p-2 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500 resize-y"
-                                spellCheck={false}
-                                placeholder="내용 입력..."
-                              />
-                            )}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            );
-          })}
-        </div>
+      <div className="flex-1 overflow-hidden">
+        <div ref={containerRef} className="h-full w-full" />
       </div>
-
-      {/* 우클릭 컨텍스트 메뉴 */}
-      {contextMenu.visible && (
-        <div
-          className="fixed bg-white border border-slate-200 shadow-xl rounded-md py-1 z-50 text-sm w-48 text-slate-700"
-          style={{ top: contextMenu.y, left: contextMenu.x }}
-        >
-          <button
-            className="w-full text-left px-4 py-2 hover:bg-slate-100"
-            onClick={() => addRow("above")}
-          >
-            위에 행 1개 삽입
-          </button>
-          <button
-            className="w-full text-left px-4 py-2 hover:bg-slate-100"
-            onClick={() => addRow("below")}
-          >
-            아래에 행 1개 삽입
-          </button>
-          <div className="border-t border-slate-200 my-1"></div>
-          <button
-            className="w-full text-left px-4 py-2 hover:bg-slate-100"
-            onClick={() => copyRow("cut")}
-          >
-            잘라내기
-          </button>
-          <button
-            className="w-full text-left px-4 py-2 hover:bg-slate-100"
-            onClick={() => copyRow("copy")}
-          >
-            복사
-          </button>
-          <button
-            className="w-full text-left px-4 py-2 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed"
-            disabled={!clipboardRow}
-            onClick={pasteRow}
-          >
-            붙여넣기
-          </button>
-          <div className="border-t border-slate-200 my-1"></div>
-          <button
-            className="w-full text-left px-4 py-2 hover:bg-slate-100 text-red-600"
-            onClick={deleteRow}
-          >
-            행 삭제
-          </button>
-        </div>
-      )}
     </div>
   );
+}
+
+function buildMonthSheetSkeleton(year: number, month: number) {
+  const weekCount = 6;
+  const blockRowCount = 6;
+  const rows = 1 + weekCount * blockRowCount;
+  const cols = 7;
+
+  const firstDay = new Date(year, month - 1, 1);
+  const lastDay = new Date(year, month, 0);
+  const daysInMonth = lastDay.getDate();
+  const startingDayOfWeek = firstDay.getDay() === 0 ? 6 : firstDay.getDay() - 1; // 월=0 ... 일=6
+
+  const cellData: Record<number, Record<number, { v: string }>> = {
+    0: {
+      0: { v: "월" },
+      1: { v: "화" },
+      2: { v: "수" },
+      3: { v: "목" },
+      4: { v: "금" },
+      5: { v: "토" },
+      6: { v: "일" },
+    },
+  };
+
+  let day = 1;
+  for (let w = 0; w < weekCount; w++) {
+    const topRow = 1 + w * blockRowCount;
+    cellData[topRow] = cellData[topRow] ?? {};
+
+    for (let dow = 0; dow < 7; dow++) {
+      if (w === 0 && dow < startingDayOfWeek) continue;
+      if (day > daysInMonth) continue;
+
+      cellData[topRow][dow] = { v: `${day}일` };
+      day++;
+    }
+  }
+
+  return {
+    rows,
+    cols,
+    weekCount,
+    blockRowCount,
+    cellData,
+  };
+}
+
+function applyMonthBlockMerges(
+  fWorksheet: { getRange: (a1: string) => { merge: () => unknown } },
+  weekCount: number,
+  blockRowCount: number,
+) {
+  for (let w = 0; w < weekCount; w++) {
+    const topRow = 1 + w * blockRowCount;
+    const bottomRow = topRow + blockRowCount - 1;
+    for (let c = 0; c < 7; c++) {
+      const col = columnIndexToLetter(c);
+      const a1 = `${col}${topRow + 1}:${col}${bottomRow + 1}`;
+      fWorksheet.getRange(a1).merge();
+    }
+  }
+}
+
+function columnIndexToLetter(index: number) {
+  let n = index + 1;
+  let letters = "";
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    letters = String.fromCharCode(65 + rem) + letters;
+    n = Math.floor((n - 1) / 26);
+  }
+  return letters;
 }
