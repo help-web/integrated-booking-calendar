@@ -11,3 +11,7 @@
 - 날짜 블록은 `mergeData`로 열별 세로 병합. 날짜 라벨만 `N일 (요일)` 형식, 토 `#1d4ed8`·일 `#dc2626`.
 - 회의실·예약·아르바이트 표는 2단계 이후. Supabase 로드는 유지하되 시트에는 아직 반영하지 않음.
 
+## 2026-06-04 (2)
+- Univer locale `LocaleType.KO_KR` + `@univerjs/preset-sheets-core/locales/ko-KR` (공식 preset i18n 방식).
+- 날짜 블록 세로 병합 제거. 주당 6행(날짜·이용가능·마감·예약×2·특이사항)을 각각 독립 셀, 열별 `OUTSIDE` 테두리로 블록 구분.
+

@@ -4,7 +4,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { UniverSheetsCorePreset } from "@univerjs/preset-sheets-core";
-import UniverPresetSheetsCoreEnUS from "@univerjs/preset-sheets-core/locales/en-US";
+import UniverPresetSheetsCoreKoKR from "@univerjs/preset-sheets-core/locales/ko-KR";
 import { createUniver, LocaleType, mergeLocales } from "@univerjs/presets";
 
 const FALLBACK_ROOMS = [
@@ -168,9 +168,9 @@ export default function Dashboard() {
     univerApiRef.current?.dispose();
 
     const { univerAPI } = createUniver({
-      locale: LocaleType.EN_US,
+      locale: LocaleType.KO_KR,
       locales: {
-        [LocaleType.EN_US]: mergeLocales(UniverPresetSheetsCoreEnUS),
+        [LocaleType.KO_KR]: mergeLocales(UniverPresetSheetsCoreKoKR),
       },
       presets: [
         UniverSheetsCorePreset({
@@ -194,7 +194,14 @@ export default function Dashboard() {
         built.columnCount,
         { sheet: built.sheetSnapshot },
       );
-      applyMonthDateColors(fWorksheet, built.dateColorCells);
+      const sheetFacade = fWorksheet as {
+        getRange: (a1: string) => {
+          setFontColor: (color: string) => unknown;
+          setBorder: (type: unknown, style: unknown, color?: string) => unknown;
+        };
+      };
+      applyMonthDateColors(sheetFacade, built.dateColorCells);
+      applyMonthDayBlockBorders(sheetFacade, built.dayBlockRanges, univerAPI);
     }
 
     return () => {
@@ -241,21 +248,27 @@ export default function Dashboard() {
 
 const DAY_LABELS = ["월", "화", "수", "목", "금", "토", "일"] as const;
 const CALENDAR_WEEK_COUNT = 6;
+/** CALENDAR_LAYOUT.md 블록 내부 행: 날짜·이용가능·마감·예약(2)·특이사항 */
 const CALENDAR_BLOCK_ROW_COUNT = 6;
+const BLOCK_ROW_DATE = 0;
+const BLOCK_ROW_AVAILABLE = 1;
+const BLOCK_ROW_CLOSED = 2;
+const BLOCK_ROW_RESERVATION_START = 3;
+const BLOCK_ROW_NOTES = 5;
 const SATURDAY_DATE_COLOR = "#1d4ed8";
 const SUNDAY_DATE_COLOR = "#dc2626";
-
-type MergeRange = {
-  startRow: number;
-  endRow: number;
-  startColumn: number;
-  endColumn: number;
-};
+const DAY_BLOCK_BORDER_COLOR = "#94a3b8";
 
 type DateColorCell = {
   row: number;
   col: number;
   color: string;
+};
+
+type DayBlockRange = {
+  topRow: number;
+  bottomRow: number;
+  col: number;
 };
 
 function buildMonthSheetSkeleton(year: number, month: number) {
@@ -270,8 +283,8 @@ function buildMonthSheetSkeleton(year: number, month: number) {
   const startingDayOfWeek = firstDay.getDay() === 0 ? 6 : firstDay.getDay() - 1;
 
   const cellData: Record<number, Record<number, { v: string }>> = {};
-  const mergeData: MergeRange[] = [];
   const dateColorCells: DateColorCell[] = [];
+  const dayBlockRanges: DayBlockRange[] = [];
   const rowData: Record<number, { h: number }> = { 0: { h: 28 } };
 
   for (let col = 0; col < 7; col++) {
@@ -285,29 +298,29 @@ function buildMonthSheetSkeleton(year: number, month: number) {
     const bottomRow = topRow + blockRowCount - 1;
 
     for (let col = 0; col < 7; col++) {
-      mergeData.push({
-        startRow: topRow,
-        endRow: bottomRow,
-        startColumn: col,
-        endColumn: col,
-      });
+      dayBlockRanges.push({ topRow, bottomRow, col });
     }
 
-    for (let r = topRow; r <= bottomRow; r++) {
-      rowData[r] = { h: 22 };
+    rowData[topRow + BLOCK_ROW_DATE] = { h: 24 };
+    rowData[topRow + BLOCK_ROW_AVAILABLE] = { h: 20 };
+    rowData[topRow + BLOCK_ROW_CLOSED] = { h: 20 };
+    for (let r = BLOCK_ROW_RESERVATION_START; r < BLOCK_ROW_NOTES; r++) {
+      rowData[topRow + r] = { h: 22 };
     }
+    rowData[topRow + BLOCK_ROW_NOTES] = { h: 22 };
 
     for (let dow = 0; dow < 7; dow++) {
       if (w === 0 && dow < startingDayOfWeek) continue;
       if (day > daysInMonth) continue;
 
-      cellData[topRow] = cellData[topRow] ?? {};
-      cellData[topRow][dow] = { v: `${day}일 (${DAY_LABELS[dow]})` };
+      const dateRow = topRow + BLOCK_ROW_DATE;
+      cellData[dateRow] = cellData[dateRow] ?? {};
+      cellData[dateRow][dow] = { v: `${day}일 (${DAY_LABELS[dow]})` };
 
       if (dow === 5) {
-        dateColorCells.push({ row: topRow, col: dow, color: SATURDAY_DATE_COLOR });
+        dateColorCells.push({ row: dateRow, col: dow, color: SATURDAY_DATE_COLOR });
       } else if (dow === 6) {
-        dateColorCells.push({ row: topRow, col: dow, color: SUNDAY_DATE_COLOR });
+        dateColorCells.push({ row: dateRow, col: dow, color: SUNDAY_DATE_COLOR });
       }
 
       day++;
@@ -318,24 +331,41 @@ function buildMonthSheetSkeleton(year: number, month: number) {
     rowCount,
     columnCount,
     cellData,
-    mergeData,
+    mergeData: [],
     defaultColumnWidth: 132,
-    defaultRowHeight: 22,
+    defaultRowHeight: 20,
     rowData,
   };
 
-  return { rowCount, columnCount, sheetSnapshot, dateColorCells };
+  return { rowCount, columnCount, sheetSnapshot, dateColorCells, dayBlockRanges };
 }
 
 function applyMonthDateColors(
-  fWorksheet: {
-    getRange: (a1: string) => { setFontColor: (color: string) => unknown };
-  },
+  fWorksheet: { getRange: (a1: string) => { setFontColor: (color: string) => unknown } },
   dateColorCells: DateColorCell[],
 ) {
   for (const { row, col, color } of dateColorCells) {
     const a1 = `${columnIndexToLetter(col)}${row + 1}`;
     fWorksheet.getRange(a1).setFontColor(color);
+  }
+}
+
+function applyMonthDayBlockBorders(
+  fWorksheet: {
+    getRange: (a1: string) => {
+      setBorder: (type: unknown, style: unknown, color?: string) => unknown;
+    };
+  },
+  dayBlockRanges: DayBlockRange[],
+  univerAPI: ReturnType<typeof createUniver>["univerAPI"],
+) {
+  const { BorderType, BorderStyleTypes } = univerAPI.Enum;
+  for (const { topRow, bottomRow, col } of dayBlockRanges) {
+    const colLetter = columnIndexToLetter(col);
+    const a1 = `${colLetter}${topRow + 1}:${colLetter}${bottomRow + 1}`;
+    fWorksheet
+      .getRange(a1)
+      .setBorder(BorderType.OUTSIDE, BorderStyleTypes.THIN, DAY_BLOCK_BORDER_COLOR);
   }
 }
 
