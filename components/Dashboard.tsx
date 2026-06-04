@@ -187,9 +187,14 @@ export default function Dashboard() {
     });
     for (let m = 1; m <= 12; m++) {
       const monthName = `${m}월`;
-      const sheet = buildMonthSheetSkeleton(year, m);
-      const fWorksheet = fWorkbook.create(monthName, sheet.rows, sheet.cols, { sheet });
-      applyMonthBlockMerges(fWorksheet, sheet.weekCount, sheet.blockRowCount);
+      const built = buildMonthSheetSkeleton(year, m);
+      const fWorksheet = fWorkbook.create(
+        monthName,
+        built.rowCount,
+        built.columnCount,
+        { sheet: built.sheetSnapshot },
+      );
+      applyMonthDateColors(fWorksheet, built.dateColorCells);
     }
 
     return () => {
@@ -234,65 +239,103 @@ export default function Dashboard() {
   );
 }
 
+const DAY_LABELS = ["월", "화", "수", "목", "금", "토", "일"] as const;
+const CALENDAR_WEEK_COUNT = 6;
+const CALENDAR_BLOCK_ROW_COUNT = 6;
+const SATURDAY_DATE_COLOR = "#1d4ed8";
+const SUNDAY_DATE_COLOR = "#dc2626";
+
+type MergeRange = {
+  startRow: number;
+  endRow: number;
+  startColumn: number;
+  endColumn: number;
+};
+
+type DateColorCell = {
+  row: number;
+  col: number;
+  color: string;
+};
+
 function buildMonthSheetSkeleton(year: number, month: number) {
-  const weekCount = 6;
-  const blockRowCount = 6;
-  const rows = 1 + weekCount * blockRowCount;
-  const cols = 7;
+  const weekCount = CALENDAR_WEEK_COUNT;
+  const blockRowCount = CALENDAR_BLOCK_ROW_COUNT;
+  const rowCount = 1 + weekCount * blockRowCount;
+  const columnCount = 7;
 
   const firstDay = new Date(year, month - 1, 1);
   const lastDay = new Date(year, month, 0);
   const daysInMonth = lastDay.getDate();
-  const startingDayOfWeek = firstDay.getDay() === 0 ? 6 : firstDay.getDay() - 1; // 월=0 ... 일=6
+  const startingDayOfWeek = firstDay.getDay() === 0 ? 6 : firstDay.getDay() - 1;
 
-  const cellData: Record<number, Record<number, { v: string }>> = {
-    0: {
-      0: { v: "월" },
-      1: { v: "화" },
-      2: { v: "수" },
-      3: { v: "목" },
-      4: { v: "금" },
-      5: { v: "토" },
-      6: { v: "일" },
-    },
-  };
+  const cellData: Record<number, Record<number, { v: string }>> = {};
+  const mergeData: MergeRange[] = [];
+  const dateColorCells: DateColorCell[] = [];
+  const rowData: Record<number, { h: number }> = { 0: { h: 28 } };
+
+  for (let col = 0; col < 7; col++) {
+    cellData[0] = cellData[0] ?? {};
+    cellData[0][col] = { v: DAY_LABELS[col] };
+  }
 
   let day = 1;
   for (let w = 0; w < weekCount; w++) {
     const topRow = 1 + w * blockRowCount;
-    cellData[topRow] = cellData[topRow] ?? {};
+    const bottomRow = topRow + blockRowCount - 1;
+
+    for (let col = 0; col < 7; col++) {
+      mergeData.push({
+        startRow: topRow,
+        endRow: bottomRow,
+        startColumn: col,
+        endColumn: col,
+      });
+    }
+
+    for (let r = topRow; r <= bottomRow; r++) {
+      rowData[r] = { h: 22 };
+    }
 
     for (let dow = 0; dow < 7; dow++) {
       if (w === 0 && dow < startingDayOfWeek) continue;
       if (day > daysInMonth) continue;
 
-      cellData[topRow][dow] = { v: `${day}일` };
+      cellData[topRow] = cellData[topRow] ?? {};
+      cellData[topRow][dow] = { v: `${day}일 (${DAY_LABELS[dow]})` };
+
+      if (dow === 5) {
+        dateColorCells.push({ row: topRow, col: dow, color: SATURDAY_DATE_COLOR });
+      } else if (dow === 6) {
+        dateColorCells.push({ row: topRow, col: dow, color: SUNDAY_DATE_COLOR });
+      }
+
       day++;
     }
   }
 
-  return {
-    rows,
-    cols,
-    weekCount,
-    blockRowCount,
+  const sheetSnapshot = {
+    rowCount,
+    columnCount,
     cellData,
+    mergeData,
+    defaultColumnWidth: 132,
+    defaultRowHeight: 22,
+    rowData,
   };
+
+  return { rowCount, columnCount, sheetSnapshot, dateColorCells };
 }
 
-function applyMonthBlockMerges(
-  fWorksheet: { getRange: (a1: string) => { merge: () => unknown } },
-  weekCount: number,
-  blockRowCount: number,
+function applyMonthDateColors(
+  fWorksheet: {
+    getRange: (a1: string) => { setFontColor: (color: string) => unknown };
+  },
+  dateColorCells: DateColorCell[],
 ) {
-  for (let w = 0; w < weekCount; w++) {
-    const topRow = 1 + w * blockRowCount;
-    const bottomRow = topRow + blockRowCount - 1;
-    for (let c = 0; c < 7; c++) {
-      const col = columnIndexToLetter(c);
-      const a1 = `${col}${topRow + 1}:${col}${bottomRow + 1}`;
-      fWorksheet.getRange(a1).merge();
-    }
+  for (const { row, col, color } of dateColorCells) {
+    const a1 = `${columnIndexToLetter(col)}${row + 1}`;
+    fWorksheet.getRange(a1).setFontColor(color);
   }
 }
 
