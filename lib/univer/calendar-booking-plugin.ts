@@ -21,15 +21,14 @@ import {
   type IMenuSelectorItem,
   MenuItemType,
 } from "@univerjs/ui";
+import { writeCellContractStatus } from "@/lib/calendar/cell-contract-status";
+import { readEventCellText } from "@/lib/calendar/cell-text";
 import type { ContractStatus, ContractStatusKind } from "@/lib/calendar/contract-status";
 import { CONTRACT_STATUS_OPTIONS } from "@/lib/calendar/contract-status";
-import {
-  getCellPlainText,
-  parseEventCellText,
-  updateEventBlockStatus,
-} from "@/lib/calendar/event-text-parser";
+import { countEventBlocks } from "@/lib/calendar/event-text-parser";
 import { isEventRow } from "@/lib/calendar/grid";
 import type { ParseIssue } from "@/lib/calendar/event-text-parser";
+import { isCalendarSyncSuppressed, runWithCalendarSyncSuppress } from "@/lib/calendar/sync-guard";
 import { syncDayRoomsFromEventCell } from "@/lib/calendar/sync-day-rooms";
 
 const PLUGIN_NAME = "INTEGRATED_BOOKING_CALENDAR_BOOKING_PLUGIN";
@@ -37,11 +36,14 @@ const CONTRACT_STATUS_MENU_ID = "calendar.menu.contract-status";
 
 export type CalendarBookingPluginConfig = {
   onParseIssues?: (issues: ParseIssue[]) => void;
+  onContractStatusChanged?: () => void;
 };
 
 type SetContractStatusParams = {
   kind: ContractStatusKind;
   blockIndex?: number;
+  row?: number;
+  col?: number;
 };
 
 function commandIdForStatus(kind: ContractStatusKind) {
@@ -52,48 +54,30 @@ function createStatusCommand(kind: ContractStatusKind): ICommand<SetContractStat
   return {
     id: commandIdForStatus(kind),
     type: CommandType.OPERATION,
-    handler: async (accessor, params) => {
+    handler: (accessor, params) => {
       const option = CONTRACT_STATUS_OPTIONS.find((item) => item.kind === kind);
       if (!option) return false;
 
-      const status = await buildContractStatus(option, params?.blockIndex);
+      const status = buildContractStatus(option);
       if (!status) return false;
 
-      return applyContractStatus(accessor, status, params?.blockIndex ?? 0);
+      return applyContractStatus(
+        accessor,
+        status,
+        params?.blockIndex ?? 0,
+        params?.row,
+        params?.col,
+      );
     },
   };
-}
-
-async function buildContractStatus(
-  option: (typeof CONTRACT_STATUS_OPTIONS)[number],
-  _blockIndex?: number,
-): Promise<ContractStatus | null> {
-  if (!option.needsDate) {
-    return { kind: option.kind } as ContractStatus;
-  }
-
-  const input = window.prompt(`${option.label} 날짜를 입력하세요. (예: 2026-03-15)`);
-  if (!input?.trim()) return null;
-
-  const date = input.trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    window.alert("날짜 형식은 YYYY-MM-DD 이어야 합니다.");
-    return null;
-  }
-
-  if (option.kind === "contract_complete") return { kind: "contract_complete", date };
-  if (option.kind === "reservation_complete") return { kind: "reservation_complete", date };
-  return null;
-}
-
-function getFacadeAPI(accessor: IAccessor) {
-  return FUniver.newAPI(accessor.get(Injector));
 }
 
 function applyContractStatus(
   accessor: IAccessor,
   status: ContractStatus,
   blockIndex: number,
+  targetRow?: number,
+  targetCol?: number,
 ): boolean {
   const univerAPI = getFacadeAPI(accessor);
   const fWorkbook = univerAPI.getActiveWorkbook();
@@ -102,42 +86,69 @@ function applyContractStatus(
   const fWorksheet = fWorkbook.getActiveSheet();
   if (!fWorksheet) return false;
 
-  const fRange = fWorksheet.getActiveRange();
-  if (!fRange) return false;
+  let row = targetRow;
+  let col = targetCol;
 
-  const row = fRange.getRow();
-  const col = fRange.getColumn();
-  if (!isEventRow(row)) return false;
-
-  const currentText = getCellPlainText(fRange.getValue(true));
-  const parsed = parseEventCellText(currentText);
-
-  let targetBlockIndex = blockIndex;
-  if (parsed.blocks.length === 0) {
-    window.alert("행사 블록이 없습니다. 행사 제목 등을 먼저 입력하세요.");
-    return false;
+  if (row == null || col == null) {
+    const fRange = fWorksheet.getActiveRange();
+    if (!fRange) return false;
+    row = fRange.getRow();
+    col = fRange.getColumn();
   }
 
-  if (parsed.blocks.length > 1 && blockIndex === 0) {
+  if (!isEventRow(row)) return false;
+
+  const fRange = fWorksheet.getRange(row, col);
+  const currentText = readEventCellText(fRange);
+  const eventCount = countEventBlocks(currentText);
+
+  let targetBlockIndex = blockIndex;
+  if (eventCount > 1) {
     const picked = window.prompt(
-      `이 셀에 행사가 ${parsed.blocks.length}개 있습니다. 적용할 행사 번호(1~${parsed.blocks.length})를 입력하세요.`,
+      `이 셀에 행사가 ${eventCount}개 있습니다. 적용할 행사 번호(1~${eventCount})를 입력하세요.`,
       "1",
     );
     if (!picked?.trim()) return false;
     const num = Number(picked.trim());
-    if (!Number.isInteger(num) || num < 1 || num > parsed.blocks.length) {
+    if (!Number.isInteger(num) || num < 1 || num > eventCount) {
       window.alert("올바른 행사 번호가 아닙니다.");
       return false;
     }
     targetBlockIndex = num - 1;
   }
 
-  const nextText = updateEventBlockStatus(currentText, targetBlockIndex, status);
-  fRange.setValueForCell(nextText);
+  return runWithCalendarSyncSuppress(() => {
+    writeCellContractStatus(fRange, targetBlockIndex, status);
+    const issues = syncDayRoomsFromEventCell(univerAPI, fWorksheet, row, col, status).issues;
+    publishIssues(accessor, issues);
+    accessor.get(CalendarBookingConfigHolder).config.onContractStatusChanged?.();
+    return true;
+  });
+}
 
-  const issues = syncDayRoomsFromEventCell(univerAPI, fWorksheet, row, col).issues;
-  publishIssues(accessor, issues);
-  return true;
+function todayDateString() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function buildContractStatus(
+  option: (typeof CONTRACT_STATUS_OPTIONS)[number],
+): ContractStatus | null {
+  if (!option.needsDate) {
+    return { kind: option.kind } as ContractStatus;
+  }
+
+  const date = todayDateString();
+  if (option.kind === "contract_complete") return { kind: "contract_complete", date };
+  if (option.kind === "reservation_complete") return { kind: "reservation_complete", date };
+  return null;
+}
+
+function getFacadeAPI(accessor: IAccessor) {
+  return FUniver.newAPI(accessor.get(Injector));
 }
 
 class CalendarBookingConfigHolder {
@@ -229,6 +240,8 @@ class CalendarBookingController extends Disposable {
     const univerAPI = FUniver.newAPI(this._injector);
     this.disposeWithMe(
       univerAPI.addEvent(univerAPI.Event.SheetValueChanged, (params) => {
+        if (isCalendarSyncSuppressed()) return;
+
         const fWorkbook = univerAPI.getActiveWorkbook();
         const fWorksheet = fWorkbook?.getActiveSheet();
         if (!fWorksheet) return;
@@ -240,6 +253,7 @@ class CalendarBookingController extends Disposable {
 
           const issues = syncDayRoomsFromEventCell(univerAPI, fWorksheet, row, col).issues;
           this._configHolder.config.onParseIssues?.(issues);
+          this._configHolder.config.onContractStatusChanged?.();
         }
       }),
     );

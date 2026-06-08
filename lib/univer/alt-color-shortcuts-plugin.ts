@@ -6,7 +6,6 @@ import {
   EDITOR_ACTIVATED,
   FOCUSING_COMMON_DRAWINGS,
   FOCUSING_SHEET,
-  FOCUSING_UNIVER_EDITOR,
   ICommandService,
   IContextService,
   Inject,
@@ -32,10 +31,10 @@ const TRIANGLE_SYMBOL = "▶";
 
 type ColorParams = { color: string };
 
-function whenSheetFocused(contextService: IContextService) {
+/** 셀 선택·편집 중 모두 배경색 단축키가 동작하도록 시트 포커스만 요구 */
+function whenSheetCellActive(contextService: IContextService) {
   return (
     contextService.getContextValue(FOCUSING_SHEET) &&
-    contextService.getContextValue(FOCUSING_UNIVER_EDITOR) &&
     !contextService.getContextValue(FOCUSING_COMMON_DRAWINGS)
   );
 }
@@ -159,7 +158,7 @@ export class UniverSheetsAltColorShortcutsPlugin extends Plugin {
           id: SetCellBackgroundColorCommandId,
           binding,
           staticParameters: { color },
-          preconditions: whenSheetFocused,
+          preconditions: whenSheetCellActive,
         }),
       );
     }

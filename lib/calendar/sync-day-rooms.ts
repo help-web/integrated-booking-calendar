@@ -2,23 +2,26 @@
 
 import type { FUniver } from "@univerjs/core/facade";
 import type { FWorksheet } from "@univerjs/sheets/facade";
+import type { ContractStatus } from "./contract-status";
+import { backgroundColorForStatus } from "./contract-status";
+import { readCellContractStatuses } from "./cell-contract-status";
+import { readEventCellText } from "./cell-text";
 import type { ParseIssue } from "./event-text-parser";
-import { getCellPlainText } from "./event-text-parser";
+import { resolveEventCellBackgroundStatus } from "./event-text-parser";
 import {
   BLOCK_ROW_EVENTS,
   CALENDAR_BLOCK_ROW_COUNT,
-  columnIndexToLetter,
   getDayBlockRowsFromEventRow,
 } from "./grid";
 import {
-  AVAILABLE_ROOM_COLOR,
+  buildOrderedAvailableRooms,
   CLOSED_ROOM_COLOR,
   computeDayRoomsFromEventText,
   formatClosedRoomText,
-  PENDING_ROOM_COLOR,
 } from "./room-placement";
+import { runWithCalendarSyncSuppress } from "./sync-guard";
 
-const AVAILABLE_ROOM_FONT_SIZE = 7;
+const ROOM_ROW_FONT_SIZE = 7;
 const CLOSED_ROW_BACKGROUND = "#E2E2D3";
 
 export type SyncDayRoomsResult = {
@@ -31,49 +34,59 @@ export function syncDayRoomsFromEventCell(
   fWorksheet: FWorksheet,
   eventRow: number,
   col: number,
+  explicitStatus?: ContractStatus,
 ): SyncDayRoomsResult {
-  const { availableRow, closedRow } = getDayBlockRowsFromEventRow(eventRow);
-  const colLetter = columnIndexToLetter(col);
-  const eventA1 = `${colLetter}${eventRow + 1}`;
-  const availableA1 = `${colLetter}${availableRow + 1}`;
-  const closedA1 = `${colLetter}${closedRow + 1}`;
+  return runWithCalendarSyncSuppress(() => {
+    const { availableRow, closedRow, eventRow: resolvedEventRow } =
+      getDayBlockRowsFromEventRow(eventRow);
 
-  const eventValue = fWorksheet.getRange(eventA1).getValue(true);
-  const eventText = getCellPlainText(eventValue);
-  const snapshot = computeDayRoomsFromEventText(eventText);
+    const eventRange = fWorksheet.getRange(resolvedEventRow, col);
+    const eventText = readEventCellText(eventRange);
+    const contractStatuses = readCellContractStatuses(eventRange);
+    const snapshot = computeDayRoomsFromEventText(eventText, contractStatuses);
 
-  const availableRange = fWorksheet.getRange(availableA1);
-  const closedRange = fWorksheet.getRange(closedA1);
+    const backgroundStatus = resolveEventCellBackgroundStatus(
+      eventText,
+      explicitStatus,
+      contractStatuses,
+    );
+    eventRange.setBackgroundColor(backgroundColorForStatus(backgroundStatus));
 
-  if (snapshot.availableBlue.length === 0 && snapshot.availableGreen.length === 0) {
-    availableRange.setValueForCell("");
-  } else {
-    const richText = buildAvailableRichText(univerAPI, snapshot.availableBlue, snapshot.availableGreen);
-    if (richText) {
-      availableRange.setRichTextValueForCell(richText as never);
-    } else {
+    const availableRange = fWorksheet.getRange(availableRow, col);
+    const closedRange = fWorksheet.getRange(closedRow, col);
+    const orderedAvailable = buildOrderedAvailableRooms(snapshot);
+
+    if (orderedAvailable.length === 0) {
       availableRange.setValueForCell("");
+    } else {
+      const richText = buildAvailableRichText(univerAPI, orderedAvailable);
+      if (richText) {
+        availableRange.setRichTextValueForCell(richText as never);
+      } else {
+        availableRange.setValueForCell("");
+      }
     }
-  }
 
-  availableRange.setFontSize(AVAILABLE_ROOM_FONT_SIZE);
-  availableRange.setWrap(false);
+    availableRange.setFontSize(ROOM_ROW_FONT_SIZE);
+    availableRange.setWrap(false);
 
-  const closedText = formatClosedRoomText(snapshot.closedRed);
-  closedRange.setValueForCell(closedText);
-  closedRange.setFontColor(CLOSED_ROOM_COLOR);
-  closedRange.setBackgroundColor(CLOSED_ROW_BACKGROUND);
+    const closedText = formatClosedRoomText(snapshot.closedRed);
+    closedRange.setValueForCell(closedText);
+    closedRange.setFontColor(CLOSED_ROOM_COLOR);
+    closedRange.setFontSize(ROOM_ROW_FONT_SIZE);
+    closedRange.setWrap(false);
+    closedRange.setBackgroundColor(CLOSED_ROW_BACKGROUND);
 
-  return {
-    issues: snapshot.issues,
-    paidServices: snapshot.paidServices,
-  };
+    return {
+      issues: snapshot.issues,
+      paidServices: snapshot.paidServices,
+    };
+  });
 }
 
 function buildAvailableRichText(
   univerAPI: FUniver,
-  blueRooms: readonly string[],
-  greenRooms: readonly string[],
+  orderedRooms: ReadonlyArray<{ room: string; color: string }>,
 ) {
   type RichTextChain = {
     insertText: (text: string) => RichTextChain;
@@ -82,13 +95,9 @@ function buildAvailableRichText(
 
   const segments: Array<{ text: string; color: string }> = [];
 
-  for (const room of blueRooms) {
-    if (segments.length > 0) segments.push({ text: ", ", color: AVAILABLE_ROOM_COLOR });
-    segments.push({ text: room, color: AVAILABLE_ROOM_COLOR });
-  }
-  for (const room of greenRooms) {
-    if (segments.length > 0) segments.push({ text: ", ", color: PENDING_ROOM_COLOR });
-    segments.push({ text: room, color: PENDING_ROOM_COLOR });
+  for (const item of orderedRooms) {
+    if (segments.length > 0) segments.push({ text: ", ", color: item.color });
+    segments.push({ text: item.room, color: item.color });
   }
 
   if (segments.length === 0) return null;

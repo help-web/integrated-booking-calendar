@@ -42,6 +42,25 @@
 - 행 높이. `setRowHeightsForced`로 일자 35·빈 회의실 25·마감 25·행사 150px (docs.univer.ai/reference/facade/worksheet).
 - 세로 정렬. 일자·빈·마감 행 `setVerticalAlignment('middle')`, 행사 행 `setVerticalAlignment('top')` (docs.univer.ai/reference/facade/range).
 
+## 2026-06-08 (5)
+- 계약 상태를 셀 텍스트가 아닌 `custom` 메타데이터(`cell-contract-status.ts`)에 저장. 행사 내용은 더 이상 덮어쓰지 않음.
+- 행사 셀 우상단 `ContractStatusOverlay` 배지·드롭다운으로 상태 변경.
+- 빈 회의실 행. 기본 순서 유지, 문의/대기 사용 룸만 같은 위치에서 초록색 글자로 표시(`buildOrderedAvailableRooms`).
+
+## 2026-06-08 (4)
+- 스택 오버플로 수정. `setBackgroundColor`·회의실 행 갱신이 `SheetValueChanged`를 재호출하던 루프를 `sync-guard.ts` 재진입 가드로 차단.
+- 계약 상태 변경 시 내용 유지. `endEditingAsync(true)`로 편집 커밋 후 읽기, `readEventCellText`는 dataStream·rich·v 중 가장 긴 텍스트 선택. 줄 수 감소 시 쓰기 중단.
+
+## 2026-06-08 (3)
+- 행사 2개 오탐 수정. 빈 줄 분리 대신 `▶` 줄에서만 다음 행사로 구분.
+- 1줄 붕괴 수정. `readEventCellText`/`writeEventCellText`로 `\r\n` 줄바꿈 보존, `setWrap(true)`.
+- 상태 접미사는 `▶` 제목 줄 끝에만 부착. 계약·예약완료 날짜는 오늘 자동.
+- Alt+5/6 배경 단축키. `FOCUSING_SHEET`만 요구(편집 중에도 동작).
+
+## 2026-06-08 (2)
+- 계약 상태→행사 셀 배경. 문의/회신필요 `#E0F0D1`, 대기 `#CFE2F3`, 완료 `#ffffff`. `setBackgroundColor` Facade API.
+- 상태 표시. 첫 줄 끝에 `문의중` 등 접미사 자동 부착(별도 줄 제거). 이전 배경색은 완료 시 `#ffffff`로 명시 덮어씀.
+
 ## 2026-06-08
 - 행사 셀 줄 인식. `-` 줄만 시스템 파싱(회의실·유료서비스), `>`·그 외 줄 무시. `lib/calendar/event-text-parser.ts`.
 - 통합룸 매핑. P/R/S/U통합→단위룸 2개, K/L통합→K/L. 회의실형 토큰 미인식 시 화면 경고 배너.

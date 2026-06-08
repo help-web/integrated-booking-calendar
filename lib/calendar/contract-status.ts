@@ -76,6 +76,31 @@ export function isStatusLine(line: string): boolean {
   return parseContractStatusLine(line) !== null;
 }
 
+/** 행사 셀 기본 배경(흰색) */
+export const EVENT_CELL_DEFAULT_BACKGROUND = "#ffffff";
+
+/** 문의중·계약서 회신 필요 — RGB(224, 240, 209) */
+export const STATUS_BG_INQUIRY = "#E0F0D1";
+
+/** 대기 1·2순위 — RGB(207, 226, 243) */
+export const STATUS_BG_WAITING = "#CFE2F3";
+
+export function backgroundColorForStatus(status: ContractStatus | null): string {
+  if (!status) return EVENT_CELL_DEFAULT_BACKGROUND;
+
+  switch (status.kind) {
+    case "inquiry":
+    case "contract_reply_needed":
+      return STATUS_BG_INQUIRY;
+    case "contract_complete":
+    case "reservation_complete":
+      return EVENT_CELL_DEFAULT_BACKGROUND;
+    case "wait_first":
+    case "wait_second":
+      return STATUS_BG_WAITING;
+  }
+}
+
 export type RoomPlacement = "available_blue" | "available_green" | "closed_red";
 
 export function placementForStatus(status: ContractStatus | null): RoomPlacement {

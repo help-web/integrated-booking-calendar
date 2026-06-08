@@ -27,6 +27,8 @@ import {
   UniverSheetsCalendarBookingPlugin,
   type CalendarBookingPluginConfig,
 } from "@/lib/univer/calendar-booking-plugin";
+import { ContractStatusInlineOverlay } from "@/components/ContractStatusInlineOverlay";
+import { setUniverAPIRef } from "@/lib/univer/univer-api-ref";
 
 const DAY_LABELS = ["월", "화", "수", "목", "금", "토", "일"] as const;
 const BLOCK_ROW_DATE_HEIGHT = 35;
@@ -244,12 +246,16 @@ function applyMonthSheetStyles(
     const a1 = `${columnIndexToLetter(col)}${row + 1}`;
     const range = fWorksheet.getRange(a1);
     range.setFontColor(CLOSED_ROOM_COLOR);
+    range.setFontSize(AVAILABLE_ROOM_FONT_SIZE);
+    range.setWrap(false);
     range.setBackgroundColor(CLOSED_ROW_BACKGROUND);
   }
 
   for (const { row, col } of built.eventRowCells) {
     const a1 = `${columnIndexToLetter(col)}${row + 1}`;
-    fWorksheet.getRange(a1).setBackgroundColor(EVENT_ROW_BACKGROUND);
+    const range = fWorksheet.getRange(a1);
+    range.setBackgroundColor(EVENT_ROW_BACKGROUND);
+    range.setWrap(true);
   }
 
   for (const { topRow, bottomRow, col } of built.dayBlockRanges) {
@@ -277,9 +283,15 @@ export default function Dashboard() {
   const univerApiRef = useRef<ReturnType<typeof createUniver>["univerAPI"] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [parseIssues, setParseIssues] = useState<ParseIssue[]>([]);
+  const [statusOverlayToken, setStatusOverlayToken] = useState(0);
+  const [activeUniverAPI, setActiveUniverAPI] = useState<ReturnType<typeof createUniver>["univerAPI"] | null>(null);
 
   const handleParseIssues = useCallback((issues: ParseIssue[]) => {
     setParseIssues(issues);
+  }, []);
+
+  const handleContractStatusChanged = useCallback(() => {
+    setStatusOverlayToken((token) => token + 1);
   }, []);
 
   useEffect(() => {
@@ -320,6 +332,7 @@ export default function Dashboard() {
 
     const bookingPluginConfig: CalendarBookingPluginConfig = {
       onParseIssues: handleParseIssues,
+      onContractStatusChanged: handleContractStatusChanged,
     };
 
     const { univerAPI } = createUniver({
@@ -339,6 +352,8 @@ export default function Dashboard() {
     });
 
     univerApiRef.current = univerAPI;
+    setActiveUniverAPI(univerAPI);
+    setUniverAPIRef(univerAPI);
 
     const fWorkbook = univerAPI.createWorkbook({
       id: String(year),
@@ -369,11 +384,15 @@ export default function Dashboard() {
     }
 
     setParseIssues(allIssues);
+    setStatusOverlayToken((token) => token + 1);
 
     return () => {
+      setUniverAPIRef(null);
       univerAPI.dispose();
+      univerApiRef.current = null;
+      setActiveUniverAPI(null);
     };
-  }, [year, handleParseIssues]);
+  }, [year, handleContractStatusChanged, handleParseIssues]);
 
   return (
     <div className="flex flex-col h-screen bg-white text-slate-800 overflow-hidden">
@@ -414,8 +433,13 @@ export default function Dashboard() {
         )}
       </div>
 
-      <div className="flex-1 overflow-hidden">
+      <div className="relative flex-1 overflow-hidden">
         <div ref={containerRef} className="h-full w-full" />
+        <ContractStatusInlineOverlay
+          univerAPI={activeUniverAPI}
+          containerRef={containerRef}
+          refreshToken={statusOverlayToken}
+        />
       </div>
     </div>
   );
