@@ -32,6 +32,23 @@
 - 날짜 블록 2행(날짜·마감). 행 높이 150px — `rowData.h` + `setRowHeightsForced`.
 - 마감 행 배경 `#E2E2D3` (`setBackgroundColor`). 빈 회의실 자동 채움은 제거(추가 행은 사용자 삽입).
 
+## 2026-06-05 (3)
+- Alt 단축키 재배치. `IShortcutService.registerShortcut` + `KeyCode`/`MetaKeys` (`@univerjs/ui`).
+- Alt+` → `InsertCommand`(`@univerjs/docs-ui`)로 커서 위치에 ▶ 삽입. `whenSheetEditorActivated` 전제.
+- Alt+1~4 → `SetRangeTextColorCommand`(`@univerjs/sheets-ui`) 경유. 편집 중 부분 텍스트 선택(비 collapsed)일 때만 실행 → `SetInlineFormatTextColorCommand`로 rich text run 색상 적용.
+- Alt+5~7 → `SetBackgroundColorCommand`(`@univerjs/sheets`)로 셀 배경색.
+
+## 2026-06-05 (2)
+- 행 높이. `setRowHeightsForced`로 일자 35·빈 회의실 25·마감 25·행사 150px (docs.univer.ai/reference/facade/worksheet).
+- 세로 정렬. 일자·빈·마감 행 `setVerticalAlignment('middle')`, 행사 행 `setVerticalAlignment('top')` (docs.univer.ai/reference/facade/range).
+
+## 2026-06-08
+- 행사 셀 줄 인식. `-` 줄만 시스템 파싱(회의실·유료서비스), `>`·그 외 줄 무시. `lib/calendar/event-text-parser.ts`.
+- 통합룸 매핑. P/R/S/U통합→단위룸 2개, K/L통합→K/L. 회의실형 토큰 미인식 시 화면 경고 배너.
+- 계약 상태. 행사 셀 우클릭 `계약 상태` 서브메뉴(`IMenuManagerService.mergeMenu` + `ContextMenuPosition.MAIN_AREA`). `lib/univer/calendar-booking-plugin.ts`.
+- 상태→회의실 자동 배치. 문의/회신필요/대기→빈 행 초록, 계약·예약완료→마감 행 빨강. `SheetValueChanged`·`setRichTextValueForCell`·`setValueForCell` Facade API.
+- Supabase `booking_rooms` 기반 빈/마감 행 채움은 제거. 행사 셀 텍스트 파생으로 전환.
+
 ## 2026-06-05
 - CALENDAR_LAYOUT 2단계 복구. 블록 4행(날짜·이용가능·마감·행사).
 - 이용 가능 회의실. `DEFAULT_CALENDAR_ROOM_LIST` 전체 목록, `setFontColor('#1d4ed8')` + `setFontSize(7)` + `setWrap(false)`.
