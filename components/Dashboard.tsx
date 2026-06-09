@@ -27,9 +27,6 @@ import {
   UniverSheetsCalendarBookingPlugin,
   type CalendarBookingPluginConfig,
 } from "@/lib/univer/calendar-booking-plugin";
-import { ContractStatusInlineOverlay } from "@/components/ContractStatusInlineOverlay";
-import { setUniverAPIRef } from "@/lib/univer/univer-api-ref";
-
 const DAY_LABELS = ["월", "화", "수", "목", "금", "토", "일"] as const;
 const BLOCK_ROW_DATE_HEIGHT = 35;
 const BLOCK_ROW_AVAILABLE_HEIGHT = 25;
@@ -283,15 +280,9 @@ export default function Dashboard() {
   const univerApiRef = useRef<ReturnType<typeof createUniver>["univerAPI"] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [parseIssues, setParseIssues] = useState<ParseIssue[]>([]);
-  const [statusOverlayToken, setStatusOverlayToken] = useState(0);
-  const [activeUniverAPI, setActiveUniverAPI] = useState<ReturnType<typeof createUniver>["univerAPI"] | null>(null);
 
   const handleParseIssues = useCallback((issues: ParseIssue[]) => {
     setParseIssues(issues);
-  }, []);
-
-  const handleContractStatusChanged = useCallback(() => {
-    setStatusOverlayToken((token) => token + 1);
   }, []);
 
   useEffect(() => {
@@ -332,7 +323,6 @@ export default function Dashboard() {
 
     const bookingPluginConfig: CalendarBookingPluginConfig = {
       onParseIssues: handleParseIssues,
-      onContractStatusChanged: handleContractStatusChanged,
     };
 
     const { univerAPI } = createUniver({
@@ -352,8 +342,6 @@ export default function Dashboard() {
     });
 
     univerApiRef.current = univerAPI;
-    setActiveUniverAPI(univerAPI);
-    setUniverAPIRef(univerAPI);
 
     const fWorkbook = univerAPI.createWorkbook({
       id: String(year),
@@ -384,15 +372,12 @@ export default function Dashboard() {
     }
 
     setParseIssues(allIssues);
-    setStatusOverlayToken((token) => token + 1);
 
     return () => {
-      setUniverAPIRef(null);
       univerAPI.dispose();
       univerApiRef.current = null;
-      setActiveUniverAPI(null);
     };
-  }, [year, handleContractStatusChanged, handleParseIssues]);
+  }, [year, handleParseIssues]);
 
   return (
     <div className="flex flex-col h-screen bg-white text-slate-800 overflow-hidden">
@@ -433,13 +418,8 @@ export default function Dashboard() {
         )}
       </div>
 
-      <div className="relative flex-1 overflow-hidden">
+      <div className="flex-1 overflow-hidden">
         <div ref={containerRef} className="h-full w-full" />
-        <ContractStatusInlineOverlay
-          univerAPI={activeUniverAPI}
-          containerRef={containerRef}
-          refreshToken={statusOverlayToken}
-        />
       </div>
     </div>
   );

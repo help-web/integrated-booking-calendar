@@ -21,6 +21,7 @@ import {
   type IMenuSelectorItem,
   MenuItemType,
 } from "@univerjs/ui";
+import { InsertRowCommand, type IInsertRowCommandParams } from "@univerjs/sheets";
 import { writeCellContractStatus } from "@/lib/calendar/cell-contract-status";
 import { readEventCellText } from "@/lib/calendar/cell-text";
 import type { ContractStatus, ContractStatusKind } from "@/lib/calendar/contract-status";
@@ -33,10 +34,10 @@ import { syncDayRoomsFromEventCell } from "@/lib/calendar/sync-day-rooms";
 
 const PLUGIN_NAME = "INTEGRATED_BOOKING_CALENDAR_BOOKING_PLUGIN";
 const CONTRACT_STATUS_MENU_ID = "calendar.menu.contract-status";
+const EVENT_ROW_HEIGHT = 150;
 
 export type CalendarBookingPluginConfig = {
   onParseIssues?: (issues: ParseIssue[]) => void;
-  onContractStatusChanged?: () => void;
 };
 
 type SetContractStatusParams = {
@@ -121,7 +122,6 @@ function applyContractStatus(
     writeCellContractStatus(fRange, targetBlockIndex, status);
     const issues = syncDayRoomsFromEventCell(univerAPI, fWorksheet, row, col, status).issues;
     publishIssues(accessor, issues);
-    accessor.get(CalendarBookingConfigHolder).config.onContractStatusChanged?.();
     return true;
   });
 }
@@ -203,6 +203,7 @@ class CalendarBookingController extends Disposable {
     super();
     this._initCommands();
     this._initMenus();
+    this._initInsertRowHeightListener();
     this._initSheetValueListener();
   }
 
@@ -236,6 +237,30 @@ class CalendarBookingController extends Disposable {
     });
   }
 
+  private _initInsertRowHeightListener(): void {
+    const univerAPI = FUniver.newAPI(this._injector);
+    this.disposeWithMe(
+      univerAPI.addEvent(univerAPI.Event.CommandExecuted, (event) => {
+        if (event.id !== InsertRowCommand.id) return;
+
+        const target = univerAPI.getCommandSheetTarget({
+          id: event.id,
+          params: event.params,
+        });
+        if (!target) return;
+
+        const params = event.params as IInsertRowCommandParams | undefined;
+        const range = params?.range;
+        if (!range) return;
+
+        const numRows = range.endRow - range.startRow + 1;
+        if (numRows <= 0) return;
+
+        target.worksheet.setRowHeightsForced(range.startRow, numRows, EVENT_ROW_HEIGHT);
+      }),
+    );
+  }
+
   private _initSheetValueListener(): void {
     const univerAPI = FUniver.newAPI(this._injector);
     this.disposeWithMe(
@@ -253,7 +278,6 @@ class CalendarBookingController extends Disposable {
 
           const issues = syncDayRoomsFromEventCell(univerAPI, fWorksheet, row, col).issues;
           this._configHolder.config.onParseIssues?.(issues);
-          this._configHolder.config.onContractStatusChanged?.();
         }
       }),
     );
